@@ -1,0 +1,134 @@
+#!/bin/bash
+
+SCRIPTDIR=$( (cd -P $(dirname $0) && pwd) )
+COREDIR=$( dirname $SCRIPTDIR  )
+corename=$( basename $SCRIPTDIR )
+DATADIR=${SCRIPTDIR}/data
+DROPBOX=/lib_content30/Metadata_dropbox/KlugeRuhe_metadata
+
+# load the shared bash functions log, vlog and Verbose
+. $COREDIR/common/outputfuncs.bash $COREDIR/common
+
+verbose=
+force=
+test=
+index=staging:production
+while getopts :vfti: opt
+ do
+      case $opt in
+          v) verbose=-v;;
+          t) test=-t;;
+          f) force=-f;;
+          i) index=$OPTARG
+      esac
+done
+shift $((OPTIND-1))
+
+if [ "$force" == "-f" ] ; then
+    Verbose "Forcing index rebuild with -f flag"
+fi
+if [ "$AWS_ACCESS_KEY_ID" == "" ] ; then
+    Echo "environment variable AWS_ACCESS_KEY_ID must be defined"
+    exit 1
+fi
+if [ "$AWS_SECRET_ACCESS_KEY" == "" ] ; then
+    Echo "environment variable AWS_SECRET_ACCESS_KEY must be defined"
+    exit 1
+fi
+#if [ "$AWS_DEFAULT_REGION" == "" ] ; then
+#    Echo "environment variable AWS_DEFAULT_REGION must be defined"
+#    exit 1
+#fi
+if [ "$AWS_REGION" == "" ] ; then
+    Echo "environment variable AWS_REGION must be defined"
+    exit 1
+fi
+
+latest_datafile=`find_newest_file_matching_pattern_under_directory $DROPBOX 'KRSC_*.txt'`
+
+cmp -s "$latest_datafile" $DATADIR/${corename}_data_16.txt
+
+new_data_file=$?
+
+if [[ "$new_data_file" != 0 ]] ; then 
+    Verbose "Copy new datafile from Metadata_dropbox"
+    cp "$latest_datafile" $DATADIR/${corename}_data_16.txt
+    iconv -f UTF-16 -t UTF-8 $DATADIR/${corename}_data_16.txt | tr '\n' ' ' | tr '\r' '\n' | egrep "[0-9]" | sed -e 's/^ //' > $DATADIR/${corename}_data.txt
+fi
+
+if [[ -e $DATADIR/oclc_nums_query.txt ]] ; then
+    cp $DATADIR/oclc_nums_query.txt $DATADIR/oclc_nums_query_bak.txt
+fi
+
+Verbose "Get all OCLC nums from the exported data file"
+cat $DATADIR/${corename}_data.txt | cut -f 33 | 
+    sed -e 's/[" ]//g' | tr ',' '\012' | 
+    egrep -v "^[ ]*$" | sort -n | egrep -v "OCLC" | 
+    uniq | sed -e 's/^/12:/' >  $DATADIR/oclc_nums_query.txt
+    
+$SCRIPTDIR/getrecsfromoclc $verbose $test $force
+
+need_oclc_recs=$?
+
+updated=0
+
+if [[ $DATADIR/oclc_recs.mrc -nt $DATADIR/oclc_indexdata.txt || $SCRIPTDIR/kluge_core_test_config.properties -nt $DATADIR/oclc_indexdata.txt || "$force" == "-f" ]] ; then
+    Verbose "Index all of the retrieved MARC records, store results in text file"
+    cat $DATADIR/oclc_recs.mrc | $SCRIPTDIR/indextest $SCRIPTDIR/solr7_kluge_index.properties 2>$DATADIR/indextest_stderr.txt  > $DATADIR/oclc_indexdata.txt
+    updated=1   
+fi
+
+for line in `cat $SCRIPTDIR/cores_to_process`
+do
+    year=`date "+%Y"`
+    solrname=`echo $line | cut -d '|' -f1`
+    s3bucket=`echo $line  | cut -d '|' -f2 | sed -e "s/2020/$year/"`
+    s3deletebucket=`echo $line | cut -d '|' -f3 | sed -e "s/2020/$year/"`
+    solrselecturl=`echo $line | cut -d '|' -f4`
+    Verbose "----------------------------------------"
+
+    if [[ "$index" =~ $solrname ]]; then
+        if [[ "$force" == "-f" || ! -e $DATADIR/${corename}_add_doc_${solrname}${test}.xml || $DATADIR/${corename}_data.txt -nt $DATADIR/${corename}_add_doc_${solrname}${test}.xml || $spreadsheet_jar -nt $DATADIR/${corename}_add_doc_${solrname}${test}.xml || "$updated" == "1" ]] ; then
+
+        Verbose "Updating solr index for ${solrname}"
+        classpath="$spreadsheet_jar:$solrmarc_jar:$solrmarc_log_jar"
+        Verbose "Step through all lines of data sorted by OCLC number passing each line to the java program ReadKlugeData"
+        cat $DATADIR/${corename}_data.txt | java -cp $classpath org.solrmarc.mixin.ReadKlugeDataVirgo4 -m $DATADIR/oclc_indexdata.txt > $DATADIR/${corename}_add_doc_${solrname}${test}.xml
+
+            Verbose "Now figure out if any records need to be deleted"
+            cat $DATADIR/${corename}_add_doc_${solrname}${test}.xml | egrep '"id"' | sed -e 's/[^>]*>//' -e 's/<.*$//' |
+sort > $DATADIR/cur_ids_being_added.ids
+            Verbose "$solrselecturl/select?fl=id&q=data_source_f%3A${corename}&rows=10000"
+            curl -s "$solrselecturl/select?fl=id&q=data_source_f%3A${corename}&rows=10000" | egrep '"id":' | sed -e 's/.*":"//' -e 's/".*$//' | sort  > $DATADIR/cur_ids_in_solr.ids
+            Verbose "Num in solr = "`cat $DATADIR/cur_ids_in_solr.ids | wc -l`
+            diff $DATADIR/cur_ids_in_solr.ids $DATADIR/cur_ids_being_added.ids | egrep '<' | sed -e 's/< //' > $DATADIR/records_to_delete_${corename}_${solrname}${test}.ids
+
+            if [ -s $DATADIR/records_to_delete_${corename}_${solrname}${test}.ids ] ; then
+                Verbose "Some records in virgo solr that are not in the new dump of all records"
+                if [ "$test" == "-t" ]; then
+                    Verbose "Would delete "`cat $DATADIR/records_to_delete_${corename}_${solrname}${test}.ids | wc -l`" records"
+                    Echo "aws s3 cp $DATADIR/records_to_delete_${corename}_${solrname}${test}.ids ${s3deletebucket}/records_to_delete_${corename}_${solrname}${test}.ids"
+                else
+                    Verbose "Deleting "`cat $DATADIR/records_to_delete_${corename}_${solrname}${test}.ids | wc -l`" records"
+                    aws s3 cp $DATADIR/records_to_delete_${corename}_${solrname}${test}.ids ${s3deletebucket}/records_to_delete_${corename}_${solrname}${test}.ids
+                fi
+            else
+               Verbose "    No records need to be deleted"
+            fi
+
+            num_to_post=`egrep '"id"' $DATADIR/${corename}_add_doc_${solrname}${test}.xml | wc -l`
+            Verbose "Upload ${num_to_post} transformed records to ${solrname} S3 bucket"
+            if [ "$test" == "-t" ]; then
+                Echo "aws s3 cp $DATADIR/${corename}_add_doc_${solrname}.xml ${s3bucket}/${corename}_add_doc_${solrname}.xml"
+            else
+                aws s3 cp $DATADIR/${corename}_add_doc_${solrname}.xml ${s3bucket}/${corename}_add_doc_${solrname}.xml
+            fi
+        else 
+            Verbose "No need to update solr index for ${solrname}"
+        fi    
+    else
+        Verbose "Skipping update of solr index for ${solrname}"
+    fi
+done
+
+Verbose "Done updating core ${corename}"

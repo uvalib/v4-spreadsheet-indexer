@@ -1,0 +1,26 @@
+#!/bin/bash
+#set -o nounset
+#set -o errexit
+
+SCRIPTDIR=$( (cd -P $(dirname $0) && pwd) )
+COREDIR=$( dirname $SCRIPTDIR  )
+corename=$( basename $SCRIPTDIR )
+DATADIR=$SCRIPTDIR/data
+
+# load the shared bash functions log, vlog and Verbose
+. $COREDIR/common/outputfuncs.bash $COREDIR/common
+
+config="$1"
+solrmarcconfig="$config"
+url=stdout
+
+updatefile=$2
+
+#Verbose "    Indexing `basename $updatefile` using config $solrmarcconfig into url $url"
+
+/lib_content23/java_1.8.0/jdk1.8.0/bin/java -jar $solrmarc_jar IndexDriver -dir $COREDIR/common/lib_solrmarc_install,$SCRIPTDIR -config "$solrmarcconfig" -solrURL $url $updatefile 
+returncode=${PIPESTATUS[0]}
+
+
+exit $returncode
+

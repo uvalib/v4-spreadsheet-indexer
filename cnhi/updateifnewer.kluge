@@ -1,0 +1,147 @@
+#!/bin/bash
+
+SCRIPTDIR=$( (cd -P $(dirname $0) && pwd) )
+COREDIR=$( dirname $SCRIPTDIR  )
+corename=$( basename $COREDIR )
+DATADIR=${SCRIPTDIR}/data
+DROPBOX=/lib_content30/Metadata_dropbox/KlugeRuhe_metadata
+SOLRMARCDISTDIR=/lib_content27/solrmarc/dist
+PATH=$SOLRMARCDISTDIR/bin:$PATH
+export PATH
+
+solrmarc_dir=$COREDIR/common
+solrmarc_jar_name=`ls -t $solrmarc_dir  | egrep "solrmarc_core" | egrep "[.]jar$" | head -1`
+solrmarc_jar="$solrmarc_dir/$solrmarc_jar_name"
+solrmarc_log_jar=`find  ${solrmarc_dir}/lib -name log4j*.jar | sort | tail -1`
+spreadsheet_jar=$COREDIR/common/cnhi_build.jar
+
+# load the shared bash functions log, vlog and Verbose
+. $COREDIR/common/outputfuncs.bash
+
+verbose=
+force=
+test=
+index=staging:production
+while getopts :vfti: opt
+ do
+      case $opt in
+          v) verbose=-v;;
+          t) test=-t;;
+          f) force=-f;;
+          i) index=$OPTARG
+      esac
+done
+shift $((OPTIND-1))
+
+if [ "$force" == "-f" ] ; then
+    Verbose "Forcing index rebuild with -f flag"
+fi
+if [ "$AWS_ACCESS_KEY_ID" == "" ] ; then
+    Echo "environment variable AWS_ACCESS_KEY_ID must be defined"
+    exit 1
+fi
+if [ "$AWS_SECRET_ACCESS_KEY" == "" ] ; then
+    Echo "environment variable AWS_SECRET_ACCESS_KEY must be defined"
+    exit 1
+fi
+#if [ "$AWS_DEFAULT_REGION" == "" ] ; then
+#    Echo "environment variable AWS_DEFAULT_REGION must be defined"
+#    exit 1
+#fi
+if [ "$AWS_REGION" == "" ] ; then
+    Echo "environment variable AWS_REGION must be defined"
+    exit 1
+fi
+
+latest_datafile=`find $DROPBOX -maxdepth 1 -name 'KRSC_*.txt' | sort | tail -1`
+
+cmp -s "$latest_datafile" $DATADIR/Kluge-Ruhe_data_16.txt
+
+new_data_file=$?
+
+if [[ "$new_data_file" != 0 ]] ; then 
+    Verbose "Copy new datafile from Metadata_dropbox"
+    cp "$latest_datafile" $DATADIR/Kluge-Ruhe_data_16.txt
+    iconv -f UTF-16 -t UTF-8 $DATADIR/Kluge-Ruhe_data_16.txt | tr '\n' ' ' | tr '\r' '\n' | egrep "[0-9]" | sed -e 's/^ //' > $DATADIR/Kluge-Ruhe_data.txt
+fi
+
+if [[ -e $DATADIR/oclc_nums_query.txt ]] ; then
+    cp $DATADIR/oclc_nums_query.txt $DATADIR/oclc_nums_query_bak.txt
+fi
+
+Verbose "Get all OCLC nums from the exported data file"
+cat $DATADIR/Kluge-Ruhe_data.txt | cut -f 33 | 
+    sed -e 's/[" ]//g' | tr ',' '\012' | 
+    egrep -v "^[ ]*$" | sort -n | egrep -v "OCLC" | 
+    uniq | sed -e 's/^/12:/' >  $DATADIR/oclc_nums_query.txt
+    
+cmp -s $DATADIR/oclc_nums_query.txt $DATADIR/oclc_nums_query_bak.txt
+need_oclc_recs=$?
+
+if [[ "$need_oclc_recs" != 0 ]] ; then
+    oclc_id_password=`cat $SCRIPTDIR/pass`
+
+    Verbose "Get all MARC records cooresponding to those nums from OCLC (this will take some time)"
+    cat $DATADIR/oclc_nums_query.txt | 
+        xargs getz3950  "zcat.oclc.org:210:OLUCWorldCat:$oclc_id_password" |
+        marcsort -q - > $DATADIR/oclc_recs.mrc
+else
+    Verbose "The file of OCLC numbers in the input data is unchanged, no need to re-fetch the MARC records from OCLC"
+fi
+    
+updated=0
+
+if [[ $DATADIR/oclc_recs.mrc -nt $DATADIR/oclc_indexdata.txt || $SCRIPTDIR/kluge_core_test_config.properties -nt $DATADIR/oclc_indexdata.txt || "$force" == "-f" ]] ; then
+    Verbose "Index all of the retrieved MARC records, store results in text file"
+    cat $DATADIR/oclc_recs.mrc | $SCRIPTDIR/indextest $SCRIPTDIR/solr7_kluge_index.properties 2>$DATADIR/indextest_stderr.txt  > $DATADIR/oclc_indexdata.txt
+    updated=1   
+fi
+
+if [[ "$force" == "-f" || ! -e $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml || $DATADIR/Kluge-Ruhe_data.txt -nt $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml || $spreadsheet_jar -nt $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml || "$updated" == "1" ]] ; then
+    classpath="$spreadsheet_jar:$solrmarc_jar:$solrmarc_log_jar"
+    Verbose "Step through all lines of data sorted by OCLC number passing each line to the java program ReadKlugeData"
+    cat $DATADIR/Kluge-Ruhe_data.txt | java -cp $classpath org.solrmarc.mixin.ReadKlugeDataVirgo4 -m $DATADIR/oclc_indexdata.txt > $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml
+
+    for line in `cat $SCRIPTDIR/cores_to_process`
+    do
+        year=`date "+%Y"`
+        solrname=`echo $line | cut -d '|' -f1`
+        s3bucket=`echo $line  | cut -d '|' -f2 | sed -e "s/2020/$year/"`
+        s3deletebucket=`echo $line | cut -d '|' -f3 | sed -e "s/2020/$year/"`
+        solrselecturl=`echo $line | cut -d '|' -f4`
+        Verbose "----------------------------------------"
+        Verbose "Updating solr index for ${solrname}"
+
+        if [[ "$index" =~ $solrname ]]; then
+    
+            Verbose "Now figure out if any records need to be deleted"
+            cat $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml | egrep '"id"' | sed -e 's/[^>]*>//' -e 's/<.*$//' |
+sort > $DATADIR/cur_ids_being_added.ids
+            Verbose "$solrselecturl/select?fl=id&q=data_source_f%3Aklugeruhe&rows=10000"
+            curl -s "$solrselecturl/select?fl=id&q=data_source_f%3Aklugeruhe&rows=10000" | egrep '"id":' | sed -e 's/.*":"//' -e 's/".*$//' | sort  > $DATADIR/cur_ids_in_solr.ids
+            Verbose "Num in solr = "`cat $DATADIR/cur_ids_in_solr.ids | wc -l`
+            diff $DATADIR/cur_ids_in_solr.ids $DATADIR/cur_ids_being_added.ids | egrep '<' | sed -e 's/< //' > $DATADIR/records_to_delete_${corename}_${solrname}.ids
+
+            if [ -s $DATADIR/records_to_delete_${corename}_${solrname}.ids ] ; then
+                Verbose "Some records in virgo solr that are not in the new dump of all records"
+                if [ "$test" == "-t" ]; then
+                    Echo "aws s3 cp $DATADIR/records_to_delete_${corename}_${solrname}.ids ${s3deletebucket}/records_to_delete_${corename}_${solrname}.ids"
+                else
+                    aws s3 cp $DATADIR/records_to_delete_${corename}_${solrname}.ids ${s3deletebucket}/records_to_delete_${corename}_${solrname}.ids
+                fi
+            else
+               Verbose "    No records need to be deleted"
+            fi
+
+            num_to_post=`egrep '"id"' $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml | wc -l`
+            Verbose "Upload ${num_to_post} transformed records to ${solrname} S3 bucket"
+            if [ "$test" == "-t" ]; then
+                Echo "aws s3 cp $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml ${s3bucket}/Kluge-Ruhe_add_doc_virgo4.xml"
+            else
+                aws s3 cp $DATADIR/Kluge-Ruhe_add_doc_virgo4.xml ${s3bucket}/Kluge-Ruhe_add_doc_virgo4.xml
+            fi
+        fi    
+    done
+fi
+
+Verbose "Done updating core ${corename}"

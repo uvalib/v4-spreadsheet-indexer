@@ -1,0 +1,54 @@
+#!/bin/bash
+
+SCRIPTDIR=$( (cd -P $(dirname $0) && pwd) )
+COREDIR=$( dirname $SCRIPTDIR  )
+corename=$( basename $SCRIPTDIR )
+DATADIR=${SCRIPTDIR}/data
+DROPBOX=/lib_content30/Metadata_dropbox/KlugeRuhe_metadata
+
+# load the shared bash functions log, vlog and Verbose
+. $COREDIR/common/outputfuncs.bash $COREDIR/common
+
+verbose=
+force=
+test=
+while getopts :vfti: opt
+ do
+      case $opt in
+          v) verbose=-v;;
+          t) test=-t;;
+          f) force=-f;;
+      esac
+done
+shift $((OPTIND-1))
+
+if [ "$force" == "-f" ] ; then
+    Verbose "Forcing OCLC record fetch -f flag"
+fi
+
+if [[ -e $DATADIR/oclc_nums_query.txt ]] ; then
+    cp $DATADIR/oclc_nums_query.txt $DATADIR/oclc_nums_query_bak.txt
+fi
+
+Verbose "Get all OCLC nums from the exported data file"
+cat $DATADIR/${corename}_data.txt | cut -f 33 | 
+    sed -e 's/[" ]//g' | tr ',' '\012' | 
+    egrep -v "^[ ]*$" | sort -n | egrep -v "OCLC" | 
+    uniq | sed -e 's/^/12:/' >  $DATADIR/oclc_nums_query.txt
+    
+cmp -s $DATADIR/oclc_nums_query.txt $DATADIR/oclc_nums_query_bak.txt
+need_oclc_recs=$?
+
+if [[ "$need_oclc_recs" != 0  || "$force" == "-f" ]] ; then
+    oclc_id_password=`cat $SCRIPTDIR/pass`
+
+    Verbose "Get all MARC records cooresponding to those nums from OCLC (this will take some time)"
+    cat $DATADIR/oclc_nums_query.txt | 
+        xargs $COREDIR/common/getz3950  "zcat.oclc.org:210:OLUCWorldCat:$oclc_id_password" |
+        $COREDIR/common/marcsort -q - > $DATADIR/oclc_recs.mrc
+else
+    Verbose "The file of OCLC numbers in the input data is unchanged, no need to re-fetch the MARC records from OCLC"
+fi
+    
+
+exit $need_oclc_recs

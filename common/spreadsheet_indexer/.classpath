@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry excluding="org/solrmarc/mixin/ISBNFix.java|org/solrmarc/mixin/CallNumUtils.java" kind="src" path="src"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-1.6"/>
+	<classpathentry kind="lib" path="lib/log4j-1.2.17.jar"/>
+	<classpathentry kind="lib" path="lib/solrmarc_core_3.0.6-24-ge60f70b-SNAPSHOT.jar" sourcepath="/solrmarc-3.0/src"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>
