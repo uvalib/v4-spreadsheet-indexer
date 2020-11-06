@@ -209,7 +209,7 @@ public class ReadKlugeDataVirgo4 extends ReadSpreadsheetDataVirgo4
             else if (format.equals("Notes")) 		   { formatSet.add("Thesis/Dissertation"); pool="thesis"; }
             else if (format.equals("Map"))             { formatSet.add("Map"); pool="maps"; }
             else if (format.equals("CD"))              { formatSet.add("Sound Recording"); formatSet.add("CD");  pool="music_recordings"; }
-            else if (format.equals("CD-ROM"))          { formatSet.add("Computer Media"); pool="book"; }
+            else if (format.equals("CD-ROM"))          { formatSet.add("Computer Media"); pool="catalog"; }
             else if (format.equals("Audio Cassette"))  { formatSet.add("Sound Recording"); formatSet.add("Cassette");  pool="music_recordings"; }
             else if (format.equals("Vinyl LP"))        { formatSet.add("Sound Recording"); formatSet.add("LP");  pool="music_recordings"; }
             else if (format.equals("Vinyl EP"))        { formatSet.add("Sound Recording"); formatSet.add("LP");  pool="music_recordings"; }

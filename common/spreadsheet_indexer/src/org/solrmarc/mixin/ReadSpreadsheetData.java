@@ -528,8 +528,7 @@ public abstract class ReadSpreadsheetData
         if (jarFile.getName().endsWith(".jar"))
         {
             jarDir = jarFile.getParentFile().getPath();
-            System.err.println("jardir: "+ jarDir);
-
+//            System.err.println("jardir: "+ jarDir);
         }
         else
         {
