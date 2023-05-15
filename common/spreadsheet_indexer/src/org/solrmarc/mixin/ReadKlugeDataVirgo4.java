@@ -196,6 +196,7 @@ public class ReadKlugeDataVirgo4 extends ReadSpreadsheetDataVirgo4
             else if (format.equals("U-matic"))         { is_video = true; formatSet.add("Video"); formatSet.add("Video U-Matic"); pool="video"; }
             else if (format.equals("Book"))            { formatSet.add("Book"); }
             else if (format.equals("Booklet"))         { formatSet.add("Book"); }
+            else if (format.equals("Book/Booklet"))    { formatSet.add("Book"); }
             else if (format.equals("Annual Report"))   { formatSet.add("Book"); }
             else if (format.equals("Catalogue"))       { formatSet.add("Book"); }
             else if (format.equals("Exhibition Catalogue"))       { formatSet.add("Book"); }
