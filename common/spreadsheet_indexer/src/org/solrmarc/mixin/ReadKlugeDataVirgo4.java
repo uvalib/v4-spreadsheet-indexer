@@ -155,7 +155,7 @@ public class ReadKlugeDataVirgo4 extends ReadSpreadsheetDataVirgo4
         
         addResult(result, "doc_type_f_stored", doctypes);
         addResult(result, "data_source_f_stored", doctypes);
-        addResult(result, "availability_a", "This item is available for use only in the Kluge-Ruhe Study Center, housed within the Kluge-Ruhe Aboriginal Art Collection of the University of Virginia. For information on viewing this item, please visit the <a href=\"http://www.kluge-ruhe.org/publications/study-center\">Kluge-Ruhe Study Center</a> web page.");
+        addResult(result, "availability_a", "This item is available for use only in the Kluge-Ruhe Study Center, housed within the Kluge-Ruhe Aboriginal Art Collection of the University of Virginia.<p>For information on viewing this item, please visit the <a href=\"https://kluge-ruhe.org/explore/kluge-ruhe-library-and-archive-resources/\">Kluge-Ruhe Study Center</a> web page.");
         addResult(result, "library_f_stored", "Kluge-Ruhe Study Center");
         addResult(result, "source_f_stored", "Kluge-Ruhe Aboriginal Art Collection Study Center");
         addResult(result, "shadowed_location_f_stored", "VISIBLE");
